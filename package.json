@@ -1,0 +1,16 @@
+{
+  "name": "scanner-monorepo",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "core",
+    "cli"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "npm test -w core",
+    "typecheck": "tsc -p core --noEmit"
+  }
+}

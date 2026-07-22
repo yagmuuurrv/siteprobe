@@ -1,0 +1,7 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.DS_Store
+
+# Local, out-of-repo smoke scripts (hit the real network)
+scripts/
