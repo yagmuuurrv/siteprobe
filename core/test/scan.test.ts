@@ -1,3 +1,5 @@
+import { Readable } from "node:stream";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { scan } from "../src/scan.js";
@@ -20,6 +22,19 @@ function fakeResponse(
     statusCode,
     headers,
     body: { dump: vi.fn().mockResolvedValue(undefined) },
+  };
+}
+
+/** Build a fake undici response whose body is a real readable stream. */
+function streamResponse(
+  statusCode: number,
+  body: string,
+  contentType: string,
+) {
+  return {
+    statusCode,
+    headers: { "content-type": contentType },
+    body: Readable.from([Buffer.from(body)]),
   };
 }
 
@@ -295,6 +310,81 @@ describe("scan() — HTTP step", () => {
           location: "https://example.com/a",
         },
       ]);
+    });
+  });
+
+  describe("response body", () => {
+    it("reads the HTML body of the final response", async () => {
+      requestMock.mockResolvedValueOnce(
+        streamResponse(200, "<html>hi</html>", "text/html; charset=utf-8") as never,
+      );
+
+      const result = await scan("example.com");
+
+      if (result.http.status !== "ok") throw new Error("expected ok");
+      expect(result.http.body).toBe("<html>hi</html>");
+      expect(result.http.bodyTruncated).toBe(false);
+    });
+
+    it("reads an application/* body", async () => {
+      requestMock.mockResolvedValueOnce(
+        streamResponse(200, '{"a":1}', "application/json") as never,
+      );
+
+      const result = await scan("example.com");
+
+      if (result.http.status !== "ok") throw new Error("expected ok");
+      expect(result.http.body).toBe('{"a":1}');
+    });
+
+    it("does not read a non-text/non-application body", async () => {
+      requestMock.mockResolvedValueOnce(
+        fakeResponse(200, { "content-type": "image/png" }) as never,
+      );
+
+      const result = await scan("example.com");
+
+      if (result.http.status !== "ok") throw new Error("expected ok");
+      expect(result.http.body).toBeNull();
+      expect(result.http.bodyTruncated).toBe(false);
+    });
+
+    it("leaves the body null when there is no content-type", async () => {
+      requestMock.mockResolvedValueOnce(fakeResponse(200) as never);
+
+      const result = await scan("example.com");
+
+      if (result.http.status !== "ok") throw new Error("expected ok");
+      expect(result.http.body).toBeNull();
+    });
+
+    it("truncates a body larger than 512KB", async () => {
+      const big = "a".repeat(512 * 1024 + 1000);
+      requestMock.mockResolvedValueOnce(
+        streamResponse(200, big, "text/html") as never,
+      );
+
+      const result = await scan("example.com");
+
+      if (result.http.status !== "ok") throw new Error("expected ok");
+      expect(result.http.bodyTruncated).toBe(true);
+      expect(result.http.body?.length).toBe(512 * 1024);
+    });
+
+    it("drains redirect bodies and reads only the final one", async () => {
+      requestMock
+        .mockResolvedValueOnce(
+          fakeResponse(301, { location: "https://example.com/final" }) as never,
+        )
+        .mockResolvedValueOnce(
+          streamResponse(200, "<html>final</html>", "text/html") as never,
+        );
+
+      const result = await scan("https://example.com");
+
+      if (result.http.status !== "ok") throw new Error("expected ok");
+      expect(result.http.finalUrl).toBe("https://example.com/final");
+      expect(result.http.body).toBe("<html>final</html>");
     });
   });
 });

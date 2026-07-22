@@ -14,6 +14,9 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 /** Default maximum number of redirects to follow. */
 const DEFAULT_MAX_REDIRECTS = 10;
 
+/** Maximum number of body bytes to read from the final response (512 KB). */
+const MAX_BODY_BYTES = 512 * 1024;
+
 /** HTTP status codes that indicate a redirect. */
 const REDIRECT_CODES = new Set([301, 302, 303, 307, 308]);
 
@@ -113,12 +116,12 @@ async function scanHttp(
         bodyTimeout: timeoutMs,
       });
 
-      // Drain the body so the socket is released back to the pool.
-      await res.body.dump();
-
       const location = headerValue(res.headers.location);
 
       if (REDIRECT_CODES.has(res.statusCode) && location !== null) {
+        // Drain the redirect body so the socket is released back to the pool.
+        await res.body.dump();
+
         const resolved = new URL(location, currentUrl).toString();
         redirectChain.push({
           url: currentUrl,
@@ -138,11 +141,14 @@ async function scanHttp(
 
       // Non-redirect (or redirect without a Location): this is the final state.
       // NOTE: a 5xx lands here as a normal `ok` result — it is NOT a timeout.
+      const { body, bodyTruncated } = await readBody(res);
       return {
         status: "ok",
         finalUrl: currentUrl,
         finalStatusCode: res.statusCode,
         redirectChain,
+        body,
+        bodyTruncated,
       };
     }
 
@@ -181,6 +187,52 @@ function normalizeUrl(target: Target): string {
 /** Canonical form of a URL for loop comparison (scheme/host/path normalized). */
 function canonicalUrl(url: string): string {
   return new URL(url).href;
+}
+
+/**
+ * Read the final response body, capped at MAX_BODY_BYTES. Only text/html and
+ * application/* bodies are read; anything else is drained and left `null` so we
+ * never pull binary blobs into memory.
+ */
+async function readBody(
+  res: Awaited<ReturnType<typeof request>>,
+): Promise<{ body: string | null; bodyTruncated: boolean }> {
+  const contentType = headerValue(res.headers["content-type"]);
+  if (!isReadableContentType(contentType)) {
+    // Drain so the socket is released, but keep nothing.
+    await res.body.dump();
+    return { body: null, bodyTruncated: false };
+  }
+
+  const chunks: Buffer[] = [];
+  let total = 0;
+  let bodyTruncated = false;
+
+  for await (const chunk of res.body) {
+    const buf: Buffer = Buffer.isBuffer(chunk)
+      ? chunk
+      : Buffer.from(chunk as Uint8Array);
+
+    if (total + buf.length > MAX_BODY_BYTES) {
+      chunks.push(buf.subarray(0, MAX_BODY_BYTES - total));
+      bodyTruncated = true;
+      break;
+    }
+    chunks.push(buf);
+    total += buf.length;
+  }
+
+  // Stop pulling the rest of a body we've already capped.
+  if (bodyTruncated) res.body.destroy();
+
+  return { body: Buffer.concat(chunks).toString("utf8"), bodyTruncated };
+}
+
+/** Only text/html and application/* bodies are worth reading. */
+function isReadableContentType(contentType: string | null): boolean {
+  if (contentType === null) return false;
+  const type = contentType.toLowerCase().trimStart();
+  return type.startsWith("text/html") || type.startsWith("application/");
 }
 
 /** Reduce an undici header value to a single string, or null when absent. */

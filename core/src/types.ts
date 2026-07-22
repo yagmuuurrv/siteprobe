@@ -51,6 +51,13 @@ export type HttpResult =
       finalUrl: string;
       finalStatusCode: number;
       redirectChain: RedirectHop[];
+      /**
+       * Final response body, capped at 512 KB. `null` when the body was not
+       * read — the content-type was not text/html or application/*.
+       */
+      body: string | null;
+      /** True when the body was cut off at the 512 KB cap. */
+      bodyTruncated: boolean;
     }
   | {
       status: "timeout";
