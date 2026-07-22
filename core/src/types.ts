@@ -4,10 +4,12 @@
  * v1 scope (see CLAUDE.md): HTTP status + redirect chain, SSL/TLS, security
  * headers, passive tech detection, CVE matching, `--json` output.
  *
- * NOTE: In this step only the HTTP part is populated by `scan()`. The `ssl`,
- * `headers`, `tech` and `cves` types are defined here as placeholders for the
- * remaining v1 steps; `scan()` leaves them `null` / `[]` for now.
+ * NOTE: `scan()` now populates http, ssl and headers. `tech` and `cves` are
+ * still placeholders (left `[]`) until those steps are implemented.
  */
+
+import type { HeadersResult } from "./headers.js";
+import type { SslResult } from "./ssl.js";
 
 /** Scanned target: a single domain or IP (scheme optional). */
 export type Target = string;
@@ -81,27 +83,11 @@ export type HttpResult =
       redirectChain: RedirectHop[];
     };
 
-// --- v1 placeholders: typed here, not populated in this step ---
+// The SSL and header results live with their modules; re-export them so
+// consumers get everything from `types` / the barrel.
+export type { SslResult, HeadersResult };
 
-/** SSL/TLS validity result. */
-export interface SslResult {
-  valid: boolean;
-  /** Certificate expiry, ISO 8601. */
-  validTo: string;
-  issuer: string;
-  /** Chain error message, or null when the chain is valid. */
-  chainError: string | null;
-}
-
-/** Presence/value of the tracked security headers. `null` = header absent. */
-export interface SecurityHeaders {
-  hsts: string | null;
-  csp: string | null;
-  xFrameOptions: string | null;
-  xContentTypeOptions: string | null;
-  referrerPolicy: string | null;
-  permissionsPolicy: string | null;
-}
+// --- v1 placeholders: typed here, not populated yet ---
 
 /** A passively detected product/version. */
 export interface TechDetection {
@@ -133,10 +119,10 @@ export interface ScanResult {
   /** When the scan ran, ISO 8601. */
   scannedAt: string;
   http: HttpResult;
-  /** null until the SSL step is implemented. */
-  ssl: SslResult | null;
-  /** null until the headers step is implemented. */
-  headers: SecurityHeaders | null;
+  /** TLS/certificate result (`not_applicable` for plain-HTTP targets). */
+  ssl: SslResult;
+  /** Security-header findings, or null when no response body was reached. */
+  headers: HeadersResult | null;
   /** empty until the tech-detection step is implemented. */
   tech: TechDetection[];
   /** empty until the CVE step is implemented. */
