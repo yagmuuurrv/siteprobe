@@ -4,14 +4,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { scan } from "../src/scan.js";
 
-// Mock undici so no real network requests are made (CLAUDE.md: network mocked).
+// Mock undici and the TLS step so no real network requests are made
+// (CLAUDE.md: network mocked). checkHeaders is pure, so it runs for real.
 vi.mock("undici", () => ({
   request: vi.fn(),
+}));
+vi.mock("../src/ssl.js", () => ({
+  checkSsl: vi.fn(),
 }));
 
 import { request } from "undici";
 
+import { checkSsl } from "../src/ssl.js";
+
 const requestMock = vi.mocked(request);
+const checkSslMock = vi.mocked(checkSsl);
+
+/** A canned SSL result the mocked checkSsl returns unless overridden. */
+const SSL_STUB = { status: "not_applicable", reason: "mocked" } as const;
 
 /** Build a fake undici response with a drainable body. */
 function fakeResponse(
@@ -45,6 +55,8 @@ function errorWithCode(code: string): Error {
 
 beforeEach(() => {
   requestMock.mockReset();
+  checkSslMock.mockReset();
+  checkSslMock.mockResolvedValue(SSL_STUB);
 });
 
 afterEach(() => {
@@ -64,9 +76,10 @@ describe("scan() — HTTP step", () => {
     expect(result.http.redirectChain).toEqual([]);
     expect(result.http.finalUrl).toBe("https://example.com");
 
-    // Placeholder fields untouched in this step.
-    expect(result.ssl).toBeNull();
-    expect(result.headers).toBeNull();
+    // ssl comes from the (mocked) TLS step; headers are evaluated from the
+    // response; tech/cves are still placeholders.
+    expect(result.ssl).toEqual(SSL_STUB);
+    expect(result.headers).not.toBeNull();
     expect(result.tech).toEqual([]);
     expect(result.cves).toEqual([]);
   });
@@ -358,8 +371,8 @@ describe("scan() — HTTP step", () => {
       expect(result.http.body).toBeNull();
     });
 
-    it("truncates a body larger than 512KB", async () => {
-      const big = "a".repeat(512 * 1024 + 1000);
+    it("truncates a 600KB body to exactly 512KB (bytes)", async () => {
+      const big = "a".repeat(600 * 1024); // ASCII: 1 byte == 1 char
       requestMock.mockResolvedValueOnce(
         streamResponse(200, big, "text/html") as never,
       );
@@ -369,6 +382,29 @@ describe("scan() — HTTP step", () => {
       if (result.http.status !== "ok") throw new Error("expected ok");
       expect(result.http.bodyTruncated).toBe(true);
       expect(result.http.body?.length).toBe(512 * 1024);
+      expect(Buffer.byteLength(result.http.body ?? "", "utf8")).toBe(512 * 1024);
+    });
+
+    it("does not split a multi-byte UTF-8 character at the cap", async () => {
+      // "€" is 3 bytes in UTF-8; 512KB is not a multiple of 3, so a byte-level
+      // cut would land mid-character.
+      const body = "€".repeat(200 * 1024); // 600K chars -> 1.8 MB, well over cap
+      requestMock.mockResolvedValueOnce(
+        streamResponse(200, body, "text/html") as never,
+      );
+
+      const result = await scan("example.com");
+
+      if (result.http.status !== "ok") throw new Error("expected ok");
+      expect(result.http.bodyTruncated).toBe(true);
+      // No replacement character from a mid-character cut.
+      expect(result.http.body).not.toContain("�");
+      // Only whole "€" characters survived.
+      expect(result.http.body).toMatch(/^€+$/);
+      // Byte length stays within the cap (a few bytes shy after trimming).
+      const bytes = Buffer.byteLength(result.http.body ?? "", "utf8");
+      expect(bytes).toBeLessThanOrEqual(512 * 1024);
+      expect(bytes).toBeGreaterThan(512 * 1024 - 3);
     });
 
     it("drains redirect bodies and reads only the final one", async () => {
@@ -385,6 +421,61 @@ describe("scan() — HTTP step", () => {
       if (result.http.status !== "ok") throw new Error("expected ok");
       expect(result.http.finalUrl).toBe("https://example.com/final");
       expect(result.http.body).toBe("<html>final</html>");
+    });
+  });
+
+  describe("ssl + headers wiring", () => {
+    it("runs the TLS step on the target host over port 443 for https", async () => {
+      requestMock.mockResolvedValueOnce(fakeResponse(200) as never);
+
+      const result = await scan("example.com");
+
+      expect(checkSslMock).toHaveBeenCalledWith(
+        "example.com",
+        443,
+        expect.any(Object),
+      );
+      expect(result.ssl).toEqual(SSL_STUB);
+    });
+
+    it("marks TLS not_applicable for a plain-HTTP target", async () => {
+      requestMock.mockResolvedValueOnce(fakeResponse(200) as never);
+
+      await scan("http://example.com");
+
+      expect(checkSslMock).toHaveBeenCalledWith(
+        "example.com",
+        443,
+        expect.objectContaining({ httpOnly: true }),
+      );
+    });
+
+    it("evaluates the response headers into findings", async () => {
+      requestMock.mockResolvedValueOnce(
+        fakeResponse(200, {
+          "strict-transport-security": "max-age=31536000; includeSubDomains",
+        }) as never,
+      );
+
+      const result = await scan("example.com");
+
+      expect(result.headers).not.toBeNull();
+      const hsts = result.headers?.findings.find(
+        (f) => f.header === "strict-transport-security",
+      );
+      expect(hsts?.present).toBe(true);
+      expect(hsts?.severity).toBe("info");
+    });
+
+    it("leaves headers null when no response was reached (timeout)", async () => {
+      requestMock.mockRejectedValueOnce(errorWithCode("ETIMEDOUT"));
+
+      const result = await scan("example.com");
+
+      expect(result.http.status).toBe("timeout");
+      expect(result.headers).toBeNull();
+      // The TLS step is independent and still runs.
+      expect(checkSslMock).toHaveBeenCalled();
     });
   });
 });

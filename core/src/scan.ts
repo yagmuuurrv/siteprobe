@@ -1,5 +1,7 @@
 import { request } from "undici";
 
+import { checkHeaders, type ResponseHeaders } from "./headers.js";
+import { checkSsl, type CheckSslOptions, type SslResult } from "./ssl.js";
 import type {
   HttpResult,
   RedirectHop,
@@ -64,26 +66,44 @@ const TLS_MESSAGES: Record<string, string> = {
 };
 
 /**
- * Run a single passive scan against `target`.
- *
- * In this step only the HTTP/redirect step is implemented; the remaining v1
- * steps (SSL, headers, tech, CVEs) are left `null` / `[]`.
+ * Run a single passive scan against `target`: the HTTP/redirect step, the
+ * TLS/certificate step and security-header evaluation. Tech detection and CVE
+ * matching are not implemented yet (left `[]`).
  */
 export async function scan(
   target: Target,
   opts: ScanOptions = {},
 ): Promise<ScanResult> {
-  const http = await scanHttp(target, opts);
+  const { http, finalHeaders } = await scanHttp(target, opts);
+  const ssl = await scanTls(target, opts);
+  const headers = finalHeaders === null ? null : checkHeaders(finalHeaders);
 
   return {
     target,
     scannedAt: new Date().toISOString(),
     http,
-    ssl: null,
-    headers: null,
+    ssl,
+    headers,
     tech: [],
     cves: [],
   };
+}
+
+/**
+ * The TLS/certificate step. HTTPS targets are inspected; a plain-HTTP target
+ * yields a `not_applicable` SSL result.
+ */
+async function scanTls(target: Target, opts: ScanOptions): Promise<SslResult> {
+  const url = new URL(normalizeUrl(target));
+
+  const sslOpts: CheckSslOptions = {};
+  if (opts.timeoutMs !== undefined) sslOpts.timeoutMs = opts.timeoutMs;
+
+  if (url.protocol !== "https:") {
+    return checkSsl(url.hostname, 443, { ...sslOpts, httpOnly: true });
+  }
+  const port = url.port === "" ? 443 : Number.parseInt(url.port, 10);
+  return checkSsl(url.hostname, port, sslOpts);
 }
 
 /**
@@ -94,10 +114,19 @@ export async function scan(
  * statuses and are never conflated with a 5xx response (CLAUDE.md). A redirect
  * that exceeds the limit or revisits a URL yields `redirect_loop`.
  */
+/**
+ * Internal result of the HTTP step: the classified result plus the final
+ * response headers (present only on the `ok` path, for header evaluation).
+ */
+interface HttpStep {
+  http: HttpResult;
+  finalHeaders: ResponseHeaders | null;
+}
+
 async function scanHttp(
   target: Target,
   opts: ScanOptions,
-): Promise<HttpResult> {
+): Promise<HttpStep> {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxRedirects = opts.maxRedirects ?? DEFAULT_MAX_REDIRECTS;
 
@@ -131,7 +160,10 @@ async function scanHttp(
 
         // A URL we've already visited means the chain is cycling.
         if (visited.has(canonicalUrl(resolved))) {
-          return { status: "redirect_loop", redirectChain };
+          return {
+            http: { status: "redirect_loop", redirectChain },
+            finalHeaders: null,
+          };
         }
 
         visited.add(canonicalUrl(resolved));
@@ -143,33 +175,48 @@ async function scanHttp(
       // NOTE: a 5xx lands here as a normal `ok` result — it is NOT a timeout.
       const { body, bodyTruncated } = await readBody(res);
       return {
-        status: "ok",
-        finalUrl: currentUrl,
-        finalStatusCode: res.statusCode,
-        redirectChain,
-        body,
-        bodyTruncated,
+        http: {
+          status: "ok",
+          finalUrl: currentUrl,
+          finalStatusCode: res.statusCode,
+          redirectChain,
+          body,
+          bodyTruncated,
+        },
+        finalHeaders: res.headers,
       };
     }
 
     // Redirect limit exceeded without settling.
-    return { status: "redirect_loop", redirectChain };
+    return {
+      http: { status: "redirect_loop", redirectChain },
+      finalHeaders: null,
+    };
   } catch (err) {
     const code = extractErrorCode(err);
 
     if (code !== null && TLS_CODES.has(code)) {
       return {
-        status: "tls_error",
-        errorCode: code,
-        message: TLS_MESSAGES[code] ?? "TLS handshake or certificate error.",
-        redirectChain,
+        http: {
+          status: "tls_error",
+          errorCode: code,
+          message: TLS_MESSAGES[code] ?? "TLS handshake or certificate error.",
+          redirectChain,
+        },
+        finalHeaders: null,
       };
     }
     if (code !== null && TIMEOUT_CODES.has(code)) {
-      return { status: "timeout", errorCode: code, redirectChain };
+      return {
+        http: { status: "timeout", errorCode: code, redirectChain },
+        finalHeaders: null,
+      };
     }
     if (code !== null && UNREACHABLE_CODES.has(code)) {
-      return { status: "unreachable", errorCode: code, redirectChain };
+      return {
+        http: { status: "unreachable", errorCode: code, redirectChain },
+        finalHeaders: null,
+      };
     }
 
     // Unknown error: rethrow, never swallow (CLAUDE.md).
@@ -225,7 +272,46 @@ async function readBody(
   // Stop pulling the rest of a body we've already capped.
   if (bodyTruncated) res.body.destroy();
 
-  return { body: Buffer.concat(chunks).toString("utf8"), bodyTruncated };
+  // The cap is byte-based, so a cut can land inside a multi-byte UTF-8
+  // character. Drop that trailing partial sequence so it does not decode into a
+  // replacement character (the bytes still counted toward the cap).
+  const capped = bodyTruncated
+    ? trimPartialUtf8(Buffer.concat(chunks))
+    : Buffer.concat(chunks);
+
+  return { body: capped.toString("utf8"), bodyTruncated };
+}
+
+/**
+ * Drop a trailing incomplete UTF-8 sequence from a buffer. A well-formed
+ * sequence is a lead byte (0xxxxxxx, or 110/1110/11110xxxx) followed by the
+ * right number of continuation bytes (10xxxxxx); if the last sequence is short,
+ * remove it so `toString("utf8")` never yields a replacement character.
+ */
+function trimPartialUtf8(buf: Buffer): Buffer {
+  // Walk back over continuation bytes to the lead byte (at most 3 of them).
+  let lead = buf.length - 1;
+  while (lead >= 0 && (buf[lead]! & 0xc0) === 0x80 && buf.length - lead < 4) {
+    lead--;
+  }
+  if (lead < 0) return buf;
+
+  const first = buf[lead]!;
+  const seqLen =
+    first < 0x80
+      ? 1
+      : (first & 0xe0) === 0xc0
+        ? 2
+        : (first & 0xf0) === 0xe0
+          ? 3
+          : (first & 0xf8) === 0xf0
+            ? 4
+            : 1; // invalid lead byte — leave it for toString to handle
+
+  // A complete sequence ends the buffer → keep everything.
+  if (buf.length - lead >= seqLen) return buf;
+  // Otherwise the trailing sequence is truncated → drop it.
+  return buf.subarray(0, lead);
 }
 
 /** Only text/html and application/* bodies are worth reading. */
