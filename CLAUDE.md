@@ -1,10 +1,8 @@
 # CLAUDE.md
 
-> Proje adı henüz belirlenmedi. `<PROJE>` yazan yerleri repo adıyla değiştir.
-
 ## Proje
 
-`<PROJE>` — bir domain veya IP alıp o hedefin dışarıdan görünen güvenlik durumunu
+`siteprobe` — bir domain veya IP alıp o hedefin dışarıdan görünen güvenlik durumunu
 tek raporda çıkaran açık kaynak tarayıcı. MIT lisanslı.
 
 Girdi: tek domain veya IP. Çıktı: tek seferlik, durum saklamayan bir rapor.
@@ -125,8 +123,8 @@ v1 kapsam maddelerine göre durum:
 dolduruyor (`http` / `ssl` / `headers` / `tech` / `cves`). CVE adımı `skipCves` /
 CLI `--no-cve` ile atlanınca `cves: []`.
 
-`web/` henüz boş (`.gitkeep`) — v1 kapsamında değil. Proje adı: repo `siteprobe`
-ama bu dosyadaki `<PROJE>` placeholder'ı hâlâ güncellenmedi.
+`web/` henüz boş (`.gitkeep`) — v1 kapsamında değil. Kök dizinde `README.md` ve
+`LICENSE` (MIT) var.
 
-Sıradaki olası işler (v1 dışı, sormadan yapma): `web/` Next.js formu, README +
-LICENSE, `<PROJE>` → `siteprobe`, versiyonsuz imzalara CVE için versiyon çıkarma.
+Sıradaki olası işler (v1 dışı, sormadan yapma): `web/` Next.js formu, versiyonsuz
+imzalara CVE için versiyon çıkarma.
