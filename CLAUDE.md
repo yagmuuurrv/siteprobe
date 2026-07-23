@@ -126,5 +126,14 @@ CLI `--no-cve` ile atlanınca `cves: []`.
 `web/` henüz boş (`.gitkeep`) — v1 kapsamında değil. Kök dizinde `README.md` ve
 `LICENSE` (MIT) var.
 
+**npm publish hazırlığı** (henüz publish EDİLMEDİ — kullanıcı atacak): `cli`
+paketi `siteprobe@0.1.0` olarak yayınlanmaya hazır. `core` (private) build'de
+`tsup` ile bundle ediliyor — yayınlanan pakette `core` bağımlılığı yok, sadece
+`undici` runtime dep. `cli/package.json`: `bin siteprobe`, `files: ["dist"]`,
+`prepublishOnly` core'u build edip bundle alıyor. `npm pack --dry-run` → tek
+`dist/index.js` (~44 KB) + `package.json`. Publish `cli/` dizininden yapılır.
+AÇIK KONU: README/LICENSE repo kökünde, `cli/`'de olmadığı için tarball'a
+girmiyor (npm sayfası dokümansız görünür).
+
 Sıradaki olası işler (v1 dışı, sormadan yapma): `web/` Next.js formu, versiyonsuz
 imzalara CVE için versiyon çıkarma.
