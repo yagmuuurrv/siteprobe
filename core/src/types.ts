@@ -4,12 +4,13 @@
  * v1 scope (see CLAUDE.md): HTTP status + redirect chain, SSL/TLS, security
  * headers, passive tech detection, CVE matching, `--json` output.
  *
- * NOTE: `scan()` now populates http, ssl and headers. `tech` and `cves` are
- * still placeholders (left `[]`) until those steps are implemented.
+ * NOTE: `scan()` now populates http, ssl, headers and tech. `cves` is still a
+ * placeholder (left `[]`) until that step is implemented.
  */
 
 import type { HeadersResult } from "./headers.js";
 import type { SslResult } from "./ssl.js";
+import type { TechResult } from "./tech.js";
 
 /** Scanned target: a single domain or IP (scheme optional). */
 export type Target = string;
@@ -83,20 +84,11 @@ export type HttpResult =
       redirectChain: RedirectHop[];
     };
 
-// The SSL and header results live with their modules; re-export them so
+// The SSL, header and tech results live with their modules; re-export them so
 // consumers get everything from `types` / the barrel.
-export type { SslResult, HeadersResult };
+export type { SslResult, HeadersResult, TechResult };
 
-// --- v1 placeholders: typed here, not populated yet ---
-
-/** A passively detected product/version. */
-export interface TechDetection {
-  name: string;
-  /** Detected version, or null when only the product could be identified. */
-  version: string | null;
-  /** Signal the detection came from. */
-  source: "header" | "html";
-}
+// --- v1 placeholder: typed here, not populated yet ---
 
 /** A CVE matched against a detected product/version. */
 export interface CveMatch {
@@ -123,8 +115,8 @@ export interface ScanResult {
   ssl: SslResult;
   /** Security-header findings, or null when no response body was reached. */
   headers: HeadersResult | null;
-  /** empty until the tech-detection step is implemented. */
-  tech: TechDetection[];
+  /** Passively detected products; empty when nothing matched. */
+  tech: TechResult[];
   /** empty until the CVE step is implemented. */
   cves: CveMatch[];
 }

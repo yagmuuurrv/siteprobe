@@ -478,4 +478,65 @@ describe("scan() — HTTP step", () => {
       expect(checkSslMock).toHaveBeenCalled();
     });
   });
+
+  describe("tech step", () => {
+    it("detects products from the final response headers and body", async () => {
+      requestMock.mockResolvedValueOnce({
+        statusCode: 200,
+        headers: {
+          "content-type": "text/html",
+          server: "nginx/1.24.0",
+        },
+        body: Readable.from([
+          Buffer.from('<meta name="generator" content="WordPress 6.5.2">'),
+        ]),
+      } as never);
+
+      const result = await scan("example.com");
+
+      const names = result.tech.map((t) => t.name);
+      expect(names).toContain("nginx");
+      expect(names).toContain("WordPress");
+
+      const wp = result.tech.find((t) => t.name === "WordPress");
+      expect(wp?.version).toBe("6.5.2");
+      expect(wp?.confidence).toBe("high");
+    });
+
+    it("detects from Set-Cookie even when the body was not read", async () => {
+      // No readable content-type → body stays null, but cookies still match.
+      requestMock.mockResolvedValueOnce(
+        fakeResponse(200, {
+          "content-type": "image/png",
+          "set-cookie": ["PHPSESSID=abc123; path=/"],
+        }) as never,
+      );
+
+      const result = await scan("example.com");
+
+      if (result.http.status !== "ok") throw new Error("expected ok");
+      expect(result.http.body).toBeNull();
+      expect(result.tech.map((t) => t.name)).toContain("PHP");
+    });
+
+    it("leaves tech empty when no response was reached", async () => {
+      requestMock.mockRejectedValueOnce(errorWithCode("ENOTFOUND"));
+
+      const result = await scan("example.com");
+
+      expect(result.http.status).toBe("unreachable");
+      expect(result.tech).toEqual([]);
+    });
+
+    it("makes no extra request for tech detection", async () => {
+      requestMock.mockResolvedValueOnce(
+        fakeResponse(200, { server: "nginx/1.24.0" }) as never,
+      );
+
+      await scan("example.com");
+
+      // Passive only: the already-fetched response is reused (CLAUDE.md).
+      expect(requestMock).toHaveBeenCalledTimes(1);
+    });
+  });
 });

@@ -81,9 +81,37 @@ ayrı bir `TIMEOUT` / `UNREACHABLE` durumuna gider. Timeout 30sn.
 - Değişikliğe başlamadan önce **plan sun, onay bekle**.
 - Tek seferde tek konu. "Bu arada şunu da düzelttim" yapma.
 - Bir dosyayı değiştirdiysen ilgili testi de çalıştır ve sonucu göster.
+- Bir v1 adımı bitip testleri geçince, aynı iş içinde bu dosyadaki
+  **"Şu an nerede"** bölümünü de güncelle.
 - Commit'i ben atacağım; sen `git commit`/`git push` çalıştırma.
 
 ## Şu an nerede
 
-Sıfırdan başlangıç. Henüz hiçbir dosya yok.
-İlk hedef: `core`'un tip tanımları + `scan()` iskeleti + HTTP/redirect adımı.
+Monorepo iskeleti kuruldu (`core` + `cli` workspace'leri, TypeScript strict, vitest).
+v1 kapsam maddelerine göre durum:
+
+- ✅ **(1) HTTP + redirect zinciri** — `core/src/scan.ts`. Durum kodu, redirect
+  zinciri, son gövdenin okunması (512 KB cap, UTF-8 sınırında kesme).
+  Test: `core/test/scan.test.ts`
+- ✅ **(2) SSL/TLS** — `core/src/ssl.ts` (`checkSsl`). Test: `core/test/ssl.test.ts`
+- ✅ **(3) Güvenlik header'ları** — `core/src/headers.ts` (`checkHeaders`), altı
+  header. Test: `core/test/headers.test.ts`
+- ✅ **(4) Teknoloji tespiti** — `core/src/tech.ts` (`detectTech`) +
+  `core/src/signatures.ts` (22 pasif imza, veri-only). Eşleşme kaynakları: header /
+  cookie / HTML / meta generator / script src; confidence hangi kaynağın eşleştiğinden
+  türetiliyor (header & meta generator = high, cookie & HTML = medium,
+  script src = low). `scan()` ek istek atmadan eldeki yanıtı kullanıyor.
+  Test: `core/test/tech.test.ts`
+- ⬜ **(5) CVE eşleştirme** — başlanmadı. NVD API, runtime + cache. Her bulgu
+  "banner versiyonuna dayalı, doğrulanmamış" ibaresiyle çıkacak. Eşleştirme için
+  `TechResult.vendor` / `.product` (CPE) alanları hazır.
+- ⬜ **(6) `--json` çıktısı** — başlanmadı. `cli/src/index.ts` hâlâ boş placeholder;
+  argüman ayrıştırma yok.
+
+`ScanResult` (bkz. `core/src/types.ts`) şu an `http` / `ssl` / `headers` / `tech`
+alanlarını dolduruyor; sadece `cves` boş dizi.
+
+`web/` henüz boş (`.gitkeep`). Proje adı belirlenmedi — bu dosyadaki `<PROJE>`
+placeholder'ı repo adıyla değiştirilecek.
+
+Sıradaki hedef: (5) CVE eşleştirme adımı.

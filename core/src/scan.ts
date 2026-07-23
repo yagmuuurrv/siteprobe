@@ -2,6 +2,7 @@ import { request } from "undici";
 
 import { checkHeaders, type ResponseHeaders } from "./headers.js";
 import { checkSsl, type CheckSslOptions, type SslResult } from "./ssl.js";
+import { detectTech } from "./tech.js";
 import type {
   HttpResult,
   RedirectHop,
@@ -67,8 +68,8 @@ const TLS_MESSAGES: Record<string, string> = {
 
 /**
  * Run a single passive scan against `target`: the HTTP/redirect step, the
- * TLS/certificate step and security-header evaluation. Tech detection and CVE
- * matching are not implemented yet (left `[]`).
+ * TLS/certificate step, security-header evaluation and passive tech detection.
+ * CVE matching is not implemented yet (left `[]`).
  */
 export async function scan(
   target: Target,
@@ -78,15 +79,40 @@ export async function scan(
   const ssl = await scanTls(target, opts);
   const headers = finalHeaders === null ? null : checkHeaders(finalHeaders);
 
+  // Tech detection reuses the response we already have — no extra request
+  // (CLAUDE.md: passive only). Without a final response there is nothing to
+  // fingerprint; an unread body (non-HTML content type) still leaves headers
+  // and cookies to match on.
+  const tech =
+    finalHeaders === null
+      ? []
+      : detectTech(
+          finalHeaders,
+          http.status === "ok" ? (http.body ?? "") : "",
+          setCookies(finalHeaders),
+        );
+
   return {
     target,
     scannedAt: new Date().toISOString(),
     http,
     ssl,
     headers,
-    tech: [],
+    tech,
     cves: [],
   };
+}
+
+/** Every `Set-Cookie` value from the response, as a flat list of strings. */
+function setCookies(headers: ResponseHeaders): string[] {
+  const cookies: string[] = [];
+
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() !== "set-cookie" || value === undefined) continue;
+    if (Array.isArray(value)) cookies.push(...value);
+    else cookies.push(value);
+  }
+  return cookies;
 }
 
 /**
