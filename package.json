@@ -10,7 +10,8 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "npm test -w core",
-    "typecheck": "tsc -p core --noEmit"
+    "test": "npm test -w core && npm test -w cli",
+    "build": "npm run build -w core && npm run build -w cli",
+    "typecheck": "npm run build -w core && tsc -p core --noEmit && tsc -p cli --noEmit"
   }
 }

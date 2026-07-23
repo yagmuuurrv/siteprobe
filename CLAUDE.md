@@ -102,16 +102,31 @@ v1 kapsam maddelerine göre durum:
   türetiliyor (header & meta generator = high, cookie & HTML = medium,
   script src = low). `scan()` ek istek atmadan eldeki yanıtı kullanıyor.
   Test: `core/test/tech.test.ts`
-- ⬜ **(5) CVE eşleştirme** — başlanmadı. NVD API, runtime + cache. Her bulgu
-  "banner versiyonuna dayalı, doğrulanmamış" ibaresiyle çıkacak. Eşleştirme için
-  `TechResult.vendor` / `.product` (CPE) alanları hazır.
-- ⬜ **(6) `--json` çıktısı** — başlanmadı. `cli/src/index.ts` hâlâ boş placeholder;
-  argüman ayrıştırma yok.
+- ✅ **(5) CVE eşleştirme** — `core/src/cve.ts` (`matchCves`). NVD 2.0 API,
+  `cpeName` ile sorgu, runtime + `Map` cache. **Kural 1:** versiyon yoksa sorgu
+  yok (`version_unknown`). **Kural 2:** her bulgu `versionVerified: false` + "based
+  on banner version, unverified" notu taşır. `no_cves` de "açık yok demek değil"
+  notu taşır. Rate limit: anahtarsız 6sn, anahtarlı 0.6sn ara; env `NVD_API_KEY`.
+  Sonuç ayrık birleşim: `matched | no_cves | version_unknown | query_failed` — NVD
+  hatası taramayı çökertmez. `scan()`'e bağlı; `opts.skipCves` ile atlanabilir
+  (CLI `--no-cve`). Test: `core/test/cve.test.ts` (ağ mock'lu, gerçek NVD'ye
+  çıkan test yok).
+- ✅ **(6) `--json` çıktısı + CLI** — `cli/src/`: `args.ts` (`parseArgs`, saf),
+  `render.ts` (`renderJson` / `renderText`, saf), `usage.ts` (`HELP_TEXT`),
+  `index.ts` (ince entry, shebang'lı). Bayraklar: `<target>` + `--json` +
+  `--no-cve` + `-h/--help` + `-v/--version`. NVD anahtarı bayrak değil, sadece env.
+  JSON zarfı `schemaVersion: 1` + `scannedAt` taşır; yanıt gövdesi
+  serileştirilmez — yerine `http.bodyBytes` + `bodyTruncated`. Exit: 0 tamamlanan
+  tarama (timeout/unreachable dahil), 2 kullanım hatası, 1 beklenmeyen çöküş.
+  Test: `cli/test/{args,render}.test.ts` (ağsız). CLI'nin de vitest'i var; root
+  `npm test` her iki workspace'i çalıştırır.
 
-`ScanResult` (bkz. `core/src/types.ts`) şu an `http` / `ssl` / `headers` / `tech`
-alanlarını dolduruyor; sadece `cves` boş dizi.
+**v1 kapsamı tamamlandı.** `ScanResult` (bkz. `core/src/types.ts`) tüm alanları
+dolduruyor (`http` / `ssl` / `headers` / `tech` / `cves`). CVE adımı `skipCves` /
+CLI `--no-cve` ile atlanınca `cves: []`.
 
-`web/` henüz boş (`.gitkeep`). Proje adı belirlenmedi — bu dosyadaki `<PROJE>`
-placeholder'ı repo adıyla değiştirilecek.
+`web/` henüz boş (`.gitkeep`) — v1 kapsamında değil. Proje adı: repo `siteprobe`
+ama bu dosyadaki `<PROJE>` placeholder'ı hâlâ güncellenmedi.
 
-Sıradaki hedef: (5) CVE eşleştirme adımı.
+Sıradaki olası işler (v1 dışı, sormadan yapma): `web/` Next.js formu, README +
+LICENSE, `<PROJE>` → `siteprobe`, versiyonsuz imzalara CVE için versiyon çıkarma.
