@@ -3,6 +3,7 @@ export { checkSsl } from "./ssl.js";
 export { checkHeaders } from "./headers.js";
 export { detectTech } from "./tech.js";
 export { SIGNATURES } from "./signatures.js";
+export { matchCves, UNVERIFIED_NOTE, NO_CVES_NOTE } from "./cve.js";
 
 export type {
   Target,
@@ -10,7 +11,6 @@ export type {
   ScanResult,
   HttpResult,
   RedirectHop,
-  CveMatch,
 } from "./types.js";
 export type {
   SslResult,
@@ -26,3 +26,10 @@ export type {
 } from "./headers.js";
 export type { TechResult, Confidence } from "./tech.js";
 export type { Signature, SignatureMatch } from "./signatures.js";
+export type {
+  CveResult,
+  CveEntry,
+  CveSeverity,
+  NotCheckedReason,
+  MatchCvesOptions,
+} from "./cve.js";

@@ -4,10 +4,11 @@
  * v1 scope (see CLAUDE.md): HTTP status + redirect chain, SSL/TLS, security
  * headers, passive tech detection, CVE matching, `--json` output.
  *
- * NOTE: `scan()` now populates http, ssl, headers and tech. `cves` is still a
- * placeholder (left `[]`) until that step is implemented.
+ * NOTE: `scan()` populates every field. CVE matching is optional — it is
+ * skipped (leaving `cves: []`) when `ScanOptions.skipCves` is set.
  */
 
+import type { CveResult } from "./cve.js";
 import type { HeadersResult } from "./headers.js";
 import type { SslResult } from "./ssl.js";
 import type { TechResult } from "./tech.js";
@@ -21,6 +22,13 @@ export interface ScanOptions {
   timeoutMs?: number;
   /** Maximum number of redirects to follow. Default 10. */
   maxRedirects?: number;
+  /**
+   * Skip the CVE step entirely (leaving `cves: []`). For CLI `--no-cve` and any
+   * offline / rate-limited run: the rest of the scan still works without NVD.
+   */
+  skipCves?: boolean;
+  /** NVD API key for the CVE step. Defaults to `process.env.NVD_API_KEY`. */
+  nvdApiKey?: string;
 }
 
 /** A single hop in the redirect chain. */
@@ -84,26 +92,9 @@ export type HttpResult =
       redirectChain: RedirectHop[];
     };
 
-// The SSL, header and tech results live with their modules; re-export them so
-// consumers get everything from `types` / the barrel.
-export type { SslResult, HeadersResult, TechResult };
-
-// --- v1 placeholder: typed here, not populated yet ---
-
-/** A CVE matched against a detected product/version. */
-export interface CveMatch {
-  /** CVE identifier, e.g. `CVE-2021-44228`. */
-  id: string;
-  product: string;
-  version: string;
-  /**
-   * Always true in v1: the match is based on a banner version and is NOT
-   * verified. Distros backport security fixes, so this may be a false positive
-   * (CLAUDE.md red line — never claim certainty).
-   */
-  unverified: true;
-  description: string;
-}
+// The SSL, header, tech and CVE results live with their modules; re-export them
+// so consumers get everything from `types` / the barrel.
+export type { SslResult, HeadersResult, TechResult, CveResult };
 
 /** The full, single-shot, stateless scan report. */
 export interface ScanResult {
@@ -117,6 +108,9 @@ export interface ScanResult {
   headers: HeadersResult | null;
   /** Passively detected products; empty when nothing matched. */
   tech: TechResult[];
-  /** empty until the CVE step is implemented. */
-  cves: CveMatch[];
+  /**
+   * CVE lookups, one per detected product. Empty when tech detection found
+   * nothing or when `ScanOptions.skipCves` disabled the step.
+   */
+  cves: CveResult[];
 }

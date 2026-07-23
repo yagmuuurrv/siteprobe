@@ -1,8 +1,9 @@
 import { request } from "undici";
 
+import { matchCves, type CveResult, type MatchCvesOptions } from "./cve.js";
 import { checkHeaders, type ResponseHeaders } from "./headers.js";
 import { checkSsl, type CheckSslOptions, type SslResult } from "./ssl.js";
-import { detectTech } from "./tech.js";
+import { detectTech, type TechResult } from "./tech.js";
 import type {
   HttpResult,
   RedirectHop,
@@ -68,8 +69,9 @@ const TLS_MESSAGES: Record<string, string> = {
 
 /**
  * Run a single passive scan against `target`: the HTTP/redirect step, the
- * TLS/certificate step, security-header evaluation and passive tech detection.
- * CVE matching is not implemented yet (left `[]`).
+ * TLS/certificate step, security-header evaluation, passive tech detection and
+ * CVE matching. The CVE step is skipped (leaving `cves: []`) when
+ * `opts.skipCves` is set, so an offline or rate-limited run still works.
  */
 export async function scan(
   target: Target,
@@ -92,6 +94,8 @@ export async function scan(
           setCookies(finalHeaders),
         );
 
+  const cves = await scanCves(tech, opts);
+
   return {
     target,
     scannedAt: new Date().toISOString(),
@@ -99,8 +103,28 @@ export async function scan(
     ssl,
     headers,
     tech,
-    cves: [],
+    cves,
   };
+}
+
+/**
+ * The CVE step. Skipped entirely when `opts.skipCves` is set or when tech
+ * detection found nothing (matchCves would make no request anyway, but this
+ * avoids constructing options for an empty run). A per-scan cache dedups
+ * repeated CPEs within this one report.
+ */
+async function scanCves(
+  tech: TechResult[],
+  opts: ScanOptions,
+): Promise<CveResult[]> {
+  if (opts.skipCves === true || tech.length === 0) return [];
+
+  // exactOptionalPropertyTypes: only set optional fields when defined.
+  const cveOpts: MatchCvesOptions = { cache: new Map() };
+  if (opts.nvdApiKey !== undefined) cveOpts.apiKey = opts.nvdApiKey;
+  if (opts.timeoutMs !== undefined) cveOpts.timeoutMs = opts.timeoutMs;
+
+  return matchCves(tech, cveOpts);
 }
 
 /** Every `Set-Cookie` value from the response, as a flat list of strings. */

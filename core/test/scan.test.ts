@@ -492,7 +492,9 @@ describe("scan() — HTTP step", () => {
         ]),
       } as never);
 
-      const result = await scan("example.com");
+      // skipCves keeps this focused on the tech step (and avoids the CVE
+      // step's real inter-request pause); CVE wiring is covered separately.
+      const result = await scan("example.com", { skipCves: true });
 
       const names = result.tech.map((t) => t.name);
       expect(names).toContain("nginx");
@@ -512,7 +514,7 @@ describe("scan() — HTTP step", () => {
         }) as never,
       );
 
-      const result = await scan("example.com");
+      const result = await scan("example.com", { skipCves: true });
 
       if (result.http.status !== "ok") throw new Error("expected ok");
       expect(result.http.body).toBeNull();
@@ -533,10 +535,116 @@ describe("scan() — HTTP step", () => {
         fakeResponse(200, { server: "nginx/1.24.0" }) as never,
       );
 
-      await scan("example.com");
+      // skipCves so the only request that could fire is the tech step's (none).
+      await scan("example.com", { skipCves: true });
 
       // Passive only: the already-fetched response is reused (CLAUDE.md).
       expect(requestMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("CVE step", () => {
+    /** A response that fingerprints as exactly one queryable product (nginx). */
+    function nginxResponse() {
+      return fakeResponse(200, { server: "nginx/1.24.0" });
+    }
+
+    /** A fake undici response carrying an NVD payload for the CVE lookup. */
+    function nvdResponse(vulnerabilities: unknown[]) {
+      return {
+        statusCode: 200,
+        headers: { "content-type": "application/json" },
+        body: {
+          text: vi
+            .fn()
+            .mockResolvedValue(JSON.stringify({ vulnerabilities })),
+          dump: vi.fn().mockResolvedValue(undefined),
+        },
+      };
+    }
+
+    function vulnerability(id: string) {
+      return {
+        cve: {
+          id,
+          published: "2023-10-17T00:15:00.000",
+          descriptions: [{ lang: "en", value: `Description of ${id}` }],
+          metrics: {
+            cvssMetricV31: [
+              { cvssData: { baseScore: 9.8, baseSeverity: "CRITICAL" } },
+            ],
+          },
+        },
+      };
+    }
+
+    it("runs matchCves on the detected tech and fills result.cves", async () => {
+      // First request: the page (tech = nginx). Second: the NVD lookup.
+      requestMock
+        .mockResolvedValueOnce(nginxResponse() as never)
+        .mockResolvedValueOnce(
+          nvdResponse([vulnerability("CVE-2023-44487")]) as never,
+        );
+
+      const result = await scan("example.com");
+
+      expect(requestMock).toHaveBeenCalledTimes(2);
+      // The second request went to NVD for the nginx CPE.
+      expect(String(requestMock.mock.calls[1]?.[0])).toContain(
+        "services.nvd.nist.gov",
+      );
+
+      expect(result.cves).toHaveLength(1);
+      const cve = result.cves[0];
+      if (cve?.status !== "matched") throw new Error("expected matched");
+      expect(cve.name).toBe("nginx");
+      expect(cve.cves[0]?.cveId).toBe("CVE-2023-44487");
+      expect(cve.cves[0]?.versionVerified).toBe(false);
+    });
+
+    it("skips the CVE step entirely when skipCves is set", async () => {
+      requestMock.mockResolvedValueOnce(nginxResponse() as never);
+
+      const result = await scan("example.com", { skipCves: true });
+
+      // Only the page was fetched; NVD was never contacted.
+      expect(requestMock).toHaveBeenCalledTimes(1);
+      expect(result.tech.map((t) => t.name)).toContain("nginx");
+      expect(result.cves).toEqual([]);
+    });
+
+    it("makes no NVD request when no tech was detected", async () => {
+      // A bare 200 with no fingerprints → no tech → nothing to look up.
+      requestMock.mockResolvedValueOnce(fakeResponse(200) as never);
+
+      const result = await scan("example.com");
+
+      expect(requestMock).toHaveBeenCalledTimes(1);
+      expect(result.tech).toEqual([]);
+      expect(result.cves).toEqual([]);
+    });
+
+    it("makes no NVD request when the host was unreachable", async () => {
+      requestMock.mockRejectedValueOnce(errorWithCode("ENOTFOUND"));
+
+      const result = await scan("example.com");
+
+      expect(requestMock).toHaveBeenCalledTimes(1);
+      expect(result.cves).toEqual([]);
+    });
+
+    it("forwards the NVD API key from options", async () => {
+      requestMock
+        .mockResolvedValueOnce(nginxResponse() as never)
+        .mockResolvedValueOnce(nvdResponse([]) as never);
+
+      await scan("example.com", { nvdApiKey: "secret-key" });
+
+      const nvdCall = requestMock.mock.calls[1];
+      const headers = (
+        nvdCall?.[1] as { headers?: Record<string, string> } | undefined
+      )?.headers;
+      expect(headers?.["apiKey"]).toBe("secret-key");
     });
   });
 });
